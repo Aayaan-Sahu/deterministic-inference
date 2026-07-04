@@ -94,13 +94,15 @@ def test_window_offset_invariance():
         return extend_attention_fwd(q, k_buf, v_buf, qo, kvp, idx, e, SCALE)
 
     # Window starts at deliberately awkward offsets (incl. non-multiples of
-    # the 64-token tiles). Position 268..299 is covered by every split.
+    # the 64-token tiles). Compare only positions covered by BOTH splits.
     baseline = run(prefix=268)  # 32-token window, like a verify pass
     for prefix in (233, 245, 267, 269, 236):
         other = run(prefix=prefix)
-        overlap = L - 268
-        got = other[268 - prefix:268 - prefix + overlap]
-        assert torch.equal(baseline, got), (
+        common = max(268, prefix)          # first position in both windows
+        n = L - common
+        a = baseline[common - 268:common - 268 + n]
+        b = other[common - prefix:common - prefix + n]
+        assert torch.equal(a, b), (
             f"window-offset variance: prefix={prefix} changes bits for the "
             "same absolute positions — DVR determinism would break on rollback"
         )
