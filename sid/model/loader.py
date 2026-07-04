@@ -75,6 +75,9 @@ def load_weights(model_dir: Path, mcfg: ModelConfig, device: str,
     weights["norm"] = take("model.norm.weight")
     if mcfg.tie_word_embeddings:
         weights["lm_head"] = weights["embed"]
+        # Some checkpoints (e.g. Qwen3-0.6B) ship lm_head.weight anyway;
+        # HF ignores it when tying (_tied_weights_keys) — so do we.
+        raw.pop("lm_head.weight", None)
     else:
         weights["lm_head"] = take("lm_head.weight")
 
