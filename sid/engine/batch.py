@@ -34,16 +34,18 @@ class ForwardBatch:
     positions: torch.Tensor        # int64 [T]
     out_slots: torch.Tensor        # int64 [T]  KV write targets (-1 = skip)
 
-    # decode attention (CUDA split-KV): full KV including the current position
+    # Attention over the paged pool. kv_indptr/kv_indices always cover the
+    # FULL sequence (prefix + freshly written positions) — both the CUDA
+    # decode kernel and the extend kernel read every key from the pool with
+    # absolute-position tiling (see extend_attention.py on why that anchoring
+    # is load-bearing for DVR determinism).
     kv_indptr: Optional[torch.Tensor] = None    # int32 [B+1]
     kv_indices: Optional[torch.Tensor] = None   # int32
-    seq_lens: Optional[torch.Tensor] = None     # int32 [B] (GPU)
+    seq_lens: Optional[torch.Tensor] = None     # int32 [B] (GPU, decode only)
     max_seq_len: int = 0                        # host-side max(seq_lens)
 
-    # extend attention (prefill / verify / triton decode fallback): prefix only
-    qo_indptr: Optional[torch.Tensor] = None          # int32 [B+1]
-    prefix_kv_indptr: Optional[torch.Tensor] = None   # int32 [B+1]
-    prefix_kv_indices: Optional[torch.Tensor] = None  # int32
+    # extend attention (prefill / verify / triton decode fallback)
+    qo_indptr: Optional[torch.Tensor] = None    # int32 [B+1]
     max_extend_len: int = 0
 
     # sampling (R = number of logit rows)
@@ -85,15 +87,17 @@ def build_prefill_batch(reqs: list[Request], kv: KVCache, device: str,
         qo.append(qo[-1] + p)
 
     qo_indptr = torch.tensor(qo, dtype=torch.int32, device=device)
+    all_slots = torch.cat(out_slots)
     temps, top_ks, top_ps, seeds = _sampling_tensors(reqs, device)
     return ForwardBatch(
         mode=ForwardMode.PREFILL,
         input_ids=torch.cat(input_ids),
         positions=torch.cat(positions),
-        out_slots=torch.cat(out_slots),
+        out_slots=all_slots,
         qo_indptr=qo_indptr,
-        prefix_kv_indptr=torch.zeros(len(reqs) + 1, dtype=torch.int32, device=device),
-        prefix_kv_indices=torch.empty(0, dtype=torch.int32, device=device),
+        # prefix is empty: the full KV IS the freshly written prompt slots.
+        kv_indptr=qo_indptr,
+        kv_indices=all_slots.to(torch.int32),
         max_extend_len=max(r.prompt_len for r in reqs),
         sample_indices=(qo_indptr[1:] - 1).to(torch.int64),
         sample_positions=torch.tensor([r.prompt_len for r in reqs],
@@ -104,13 +108,10 @@ def build_prefill_batch(reqs: list[Request], kv: KVCache, device: str,
 
 
 def build_decode_batch(reqs: list[Request], kv: KVCache, device: str,
-                       invariant: bool, need_prefix: bool = False) -> ForwardBatch:
-    """One new token per request. Allocates one KV slot each; the CUDA kernel
-    attends over the full sequence INCLUDING the freshly written position.
-
-    need_prefix: also build the prefix-only view (excluding the current
-    position) for the Triton decode fallback backend.
-    """
+                       invariant: bool) -> ForwardBatch:
+    """One new token per request. Allocates one KV slot each; attention runs
+    over the full sequence INCLUDING the freshly written position (the Triton
+    fallback uses the same full kv_indices with extend_len = 1)."""
     bs = len(reqs)
     input_ids = torch.tensor([r.output_ids[-1] for r in reqs], dtype=torch.int64, device=device)
     pos_list = [r.prompt_len + r.num_output - 1 for r in reqs]
@@ -145,19 +146,9 @@ def build_decode_batch(reqs: list[Request], kv: KVCache, device: str,
         max_seq_len=max(seq_lens_list),
         sample_indices=torch.arange(bs, dtype=torch.int64, device=device),
         sample_positions=positions + 1,  # generated token position = fed pos + 1
+        qo_indptr=torch.arange(bs + 1, dtype=torch.int32, device=device),
+        max_extend_len=1,
         invariant=invariant,
     )
     fb.temperatures, fb.top_ks, fb.top_ps, fb.seeds = _sampling_tensors(reqs, device)
-
-    if need_prefix:
-        # Prefix view for the Triton fallback: everything except the current
-        # position (whose K/V arrive as the extend tensors).
-        prefix_rows = [kv.req_to_token[r.req_row, :pos_list[i]] for i, r in enumerate(reqs)]
-        fb.prefix_kv_indices = torch.cat(prefix_rows) if prefix_rows else \
-            torch.empty(0, dtype=torch.int32, device=device)
-        plens = torch.tensor(pos_list, dtype=torch.int64, device=device)
-        fb.prefix_kv_indptr = torch.zeros(bs + 1, dtype=torch.int32, device=device)
-        fb.prefix_kv_indptr[1:] = torch.cumsum(plens, dim=0).to(torch.int32)
-        fb.qo_indptr = torch.arange(bs + 1, dtype=torch.int32, device=device)
-        fb.max_extend_len = 1
     return fb

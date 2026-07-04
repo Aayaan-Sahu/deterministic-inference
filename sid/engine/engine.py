@@ -165,7 +165,6 @@ class Engine:
         fb = build_decode_batch(
             reqs, self.kv, self.cfg.device,
             invariant=self.cfg.mode == Mode.BATCH_INVARIANT,
-            need_prefix=self.cfg.decode_backend == "triton",
         )
         logits = self.runner.forward(fb)
         tokens = self.runner.sample(fb, logits).tolist()

@@ -98,8 +98,8 @@ class Verifier:
 
         input_ids, positions, sample_positions = [], [], []
         out_slot_chunks = []
-        prefix_lens = []
-        prefix_chunks = []
+        kv_lens = []      # full per-sequence KV length: prefix + W
+        kv_chunks = []    # pool slots for ALL positions (prefix + window)
         temps, top_ks, top_ps, seeds = [], [], [], []
         window_lens, windows = [], []
         pad_used = 0
@@ -119,8 +119,6 @@ class Verifier:
             sample_positions.extend(range(p + v, p + v + W))
 
             prefix_len = p + v - 1
-            prefix_lens.append(prefix_len)
-            prefix_chunks.append(kv.req_to_token[r.req_row, :prefix_len])
 
             # Overwrite decode's slots for the u real positions; scratch for padding.
             avail_end = p + v - 1 + u
@@ -131,13 +129,22 @@ class Verifier:
             real_slots = kv.req_to_token[r.req_row, p + v - 1:avail_end].to(torch.int64)
             pad = W - u
             if pad:
-                out_slot_chunks.append(torch.cat([
+                window_slots = torch.cat([
                     real_slots,
                     self.pool.padding_slots[pad_used:pad_used + pad],
-                ]))
+                ])
                 pad_used += pad
             else:
-                out_slot_chunks.append(real_slots)
+                window_slots = real_slots
+            out_slot_chunks.append(window_slots)
+
+            # Full KV for attention = verified prefix + the window slots
+            # (whose K/V this pass writes before attending).
+            kv_lens.append(prefix_len + W)
+            kv_chunks.append(torch.cat([
+                kv.req_to_token[r.req_row, :prefix_len].to(torch.int32),
+                window_slots.to(torch.int32),
+            ]))
 
             temps.extend([r.params.temperature] * W)
             top_ks.extend([r.params.top_k if r.params.top_k > 0 else -1] * W)
@@ -150,8 +157,10 @@ class Verifier:
             input_ids.extend([DUMMY_TOKEN_ID] * W)
             positions.extend(range(W))
             sample_positions.extend(range(1, W + 1))
-            prefix_lens.append(0)
-            out_slot_chunks.append(self.pool.dummy_slots[di * W:(di + 1) * W])
+            dummy_slots = self.pool.dummy_slots[di * W:(di + 1) * W]
+            out_slot_chunks.append(dummy_slots)
+            kv_lens.append(W)  # prefix 0: the window IS the whole sequence
+            kv_chunks.append(dummy_slots.to(torch.int32))
             temps.extend([0.0] * W)
             top_ks.extend([-1] * W)
             top_ps.extend([1.0] * W)
@@ -168,12 +177,11 @@ class Verifier:
         buf["top_ps"].copy_(torch.tensor(top_ps, dtype=torch.float32, device=dev))
         buf["seeds"].copy_(torch.tensor(seeds, dtype=torch.int64, device=dev))
 
-        total_prefix = sum(prefix_lens)
-        if total_prefix:
-            buf["prefix_kv_indices"][:total_prefix].copy_(torch.cat(prefix_chunks))
+        total_kv = sum(kv_lens)
+        buf["kv_indices"][:total_kv].copy_(torch.cat(kv_chunks))
         indptr = torch.zeros(G + 1, dtype=torch.int64)
-        indptr[1:] = torch.cumsum(torch.tensor(prefix_lens, dtype=torch.int64), dim=0)
-        buf["prefix_kv_indptr"].copy_(indptr.to(torch.int32).to(dev))
+        indptr[1:] = torch.cumsum(torch.tensor(kv_lens, dtype=torch.int64), dim=0)
+        buf["kv_indptr"].copy_(indptr.to(torch.int32).to(dev))
 
         fb = ForwardBatch(
             mode=ForwardMode.VERIFY,
@@ -181,8 +189,8 @@ class Verifier:
             positions=buf["positions"],
             out_slots=buf["out_slots"],
             qo_indptr=buf["qo_indptr"],
-            prefix_kv_indptr=buf["prefix_kv_indptr"],
-            prefix_kv_indices=buf["prefix_kv_indices"][:total_prefix],
+            kv_indptr=buf["kv_indptr"],
+            kv_indices=buf["kv_indices"][:total_kv],
             max_extend_len=W,
             sample_indices=self._sample_indices,
             sample_positions=buf["sample_positions"],

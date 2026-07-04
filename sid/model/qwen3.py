@@ -69,10 +69,11 @@ class Qwen3Model:
             )
         else:
             # PREFILL / VERIFY (and the Triton decode fallback): extend
-            # attention over the paged prefix + fresh extend tokens.
+            # attention; ALL keys (prefix + the K/V just written above) are
+            # read from the pool with absolute-position tiling.
             o = extend_attention_fwd(
-                q, k, v, k_pool, v_pool,
-                fb.qo_indptr, fb.prefix_kv_indptr, fb.prefix_kv_indices,
+                q, k_pool, v_pool,
+                fb.qo_indptr, fb.kv_indptr, fb.kv_indices,
                 fb.max_extend_len, self.sm_scale,
             )
 

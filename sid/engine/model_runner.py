@@ -79,9 +79,9 @@ class ModelRunner:
             "top_ps": torch.zeros(gw, dtype=torch.float32, device=device),
             "seeds": torch.zeros(gw, dtype=torch.int64, device=device),
             "qo_indptr": torch.zeros(cfg.dvr_group_size + 1, dtype=torch.int32, device=device),
-            "prefix_kv_indptr": torch.zeros(cfg.dvr_group_size + 1, dtype=torch.int32, device=device),
-            "prefix_kv_indices": torch.zeros(cfg.dvr_group_size * cfg.max_seq_len,
-                                             dtype=torch.int32, device=device),
+            "kv_indptr": torch.zeros(cfg.dvr_group_size + 1, dtype=torch.int32, device=device),
+            "kv_indices": torch.zeros(cfg.dvr_group_size * cfg.max_seq_len,
+                                      dtype=torch.int32, device=device),
         }
 
     def forward(self, fb: ForwardBatch) -> torch.Tensor:

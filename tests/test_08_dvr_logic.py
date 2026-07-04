@@ -47,8 +47,8 @@ class FakeRunner:
             "top_ps": torch.zeros(gw, dtype=torch.float32),
             "seeds": torch.zeros(gw, dtype=torch.int64),
             "qo_indptr": torch.zeros(g + 1, dtype=torch.int32),
-            "prefix_kv_indptr": torch.zeros(g + 1, dtype=torch.int32),
-            "prefix_kv_indices": torch.zeros(g * 256, dtype=torch.int32),
+            "kv_indptr": torch.zeros(g + 1, dtype=torch.int32),
+            "kv_indices": torch.zeros(g * 256, dtype=torch.int32),
         }
 
 
@@ -98,10 +98,11 @@ def test_window_construction_full_window():
     # out_slots REUSE decode's physical slots (the overwrite trick)
     expected_slots = kv.req_to_token[3, p + v - 1:p + v - 1 + W].tolist()
     assert buf["out_slots"][:W].tolist() == expected_slots
-    # prefix covers positions 0..P+v-2
-    assert buf["prefix_kv_indptr"].tolist()[:2] == [0, p + v - 1]
-    assert buf["prefix_kv_indices"][:p + v - 1].tolist() == \
+    # attention KV covers the FULL sequence: prefix (0..P+v-2) + window
+    assert buf["kv_indptr"].tolist()[:2] == [0, p + v - 1 + W]
+    assert buf["kv_indices"][:p + v - 1].tolist() == \
         kv.req_to_token[3, :p + v - 1].tolist()
+    assert buf["kv_indices"][p + v - 1:p + v - 1 + W].tolist() == expected_slots
     # dummy sequence fills the second slot of the group
     assert buf["input_ids"][W:2 * W].tolist() == [DUMMY_TOKEN_ID] * W
     assert meta.window_lens == [W]
