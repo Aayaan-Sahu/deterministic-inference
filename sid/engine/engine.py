@@ -67,6 +67,7 @@ class Engine:
                 prompt_ids = self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     tokenize=True, add_generation_prompt=True,
+                    return_dict=False,  # newer transformers default to a dict
                 )
             else:
                 prompt_ids = self.tokenizer.encode(prompt)

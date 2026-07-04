@@ -136,7 +136,8 @@ def chat_completions(req: CompletionRequest):
     assert req.messages, "messages required"
     with state.lock:
         prompt_ids = state.engine.tokenizer.apply_chat_template(
-            req.messages, tokenize=True, add_generation_prompt=True)
+            req.messages, tokenize=True, add_generation_prompt=True,
+            return_dict=False)
     rid = state.submit(prompt_ids=prompt_ids, params=_params(req))
     out = _wait_done(rid)
     return JSONResponse({
