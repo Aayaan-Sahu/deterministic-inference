@@ -23,8 +23,10 @@ import triton.language as tl
 BLOCK_M = 64
 BLOCK_N = 64
 NUM_WARPS = 4
-NUM_STAGES = 2
-NEG_INF = -1e30
+# Referenced inside the @jit kernel: must be tl.constexpr instances
+# (plain module globals are rejected by Triton >= 3.x).
+NUM_STAGES = tl.constexpr(2)
+NEG_INF = tl.constexpr(-1e30)
 
 
 @triton.jit
