@@ -106,8 +106,9 @@ __global__ void flash_decode_stage1_kernel(
   const int split_end = min(split_start + chunk, seq_len);
   if (split_start >= seq_len) return;
 
-  __shared__ __nv_bfloat16 sK[TILE_N][HEAD_DIM];
-  __shared__ __nv_bfloat16 sV[TILE_N][HEAD_DIM];
+  // __align__(16): these are written through uint4* (16-byte) stores.
+  __shared__ __align__(16) __nv_bfloat16 sK[TILE_N][HEAD_DIM];
+  __shared__ __align__(16) __nv_bfloat16 sV[TILE_N][HEAD_DIM];
   __shared__ float sQ[QPK][HEAD_DIM];
   __shared__ float sP[QPK][TILE_N];   // logits, then probabilities
   __shared__ float sM[QPK];           // running max

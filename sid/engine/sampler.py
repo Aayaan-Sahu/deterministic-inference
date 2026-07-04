@@ -33,6 +33,8 @@ def sample(logits: torch.Tensor, temperatures: torch.Tensor, top_ks: torch.Tenso
            top_ps: torch.Tensor, seeds: torch.Tensor,
            sample_pos: torch.Tensor) -> torch.Tensor:
     """logits: fp32 [R, V] -> int64 [R] token ids."""
+    # torch.argmax/max document first-index tie-breaking (deterministic given
+    # identical logits).
     greedy_tokens = torch.argmax(logits, dim=-1)
     stochastic = temperatures > 0
     if not bool(stochastic.any()):
@@ -50,14 +52,18 @@ def sample(logits: torch.Tensor, temperatures: torch.Tensor, top_ks: torch.Tenso
     ranks = torch.arange(probs.shape[-1], device=probs.device).expand_as(probs_sort)
     k = torch.where(top_ks > 0, top_ks, torch.full_like(top_ks, probs.shape[-1]))
     top_k_mask = ranks >= k.unsqueeze(-1)
-    masked = top_p_mask | top_k_mask
-    masked[:, 0] = False  # never mask the top token
+    dropped = top_p_mask | top_k_mask
+    dropped[:, 0] = False  # never drop the top token
 
+    # Scatter the keep-mask back to ORIGINAL vocab order and add Gumbel noise
+    # keyed by vocab id, so the sort's tie ordering cannot change the draw
+    # (rank-keyed noise would).
+    keep = torch.zeros_like(dropped)
+    keep.scatter_(-1, probs_idx, ~dropped)
     log_probs = torch.where(
-        masked, torch.full_like(probs_sort, float("-inf")), torch.log(probs_sort + _EPS)
+        keep, torch.log(probs + _EPS), torch.full_like(probs, float("-inf"))
     )
     gumbel = _seeded_gumbel(seeds, sample_pos, probs.shape[-1])
-    choice = torch.argmax(log_probs + gumbel, dim=-1, keepdim=True)  # rank index
-    sampled_tokens = probs_idx.gather(-1, choice).squeeze(-1)
+    sampled_tokens = torch.argmax(log_probs + gumbel, dim=-1)
 
     return torch.where(stochastic, sampled_tokens, greedy_tokens)

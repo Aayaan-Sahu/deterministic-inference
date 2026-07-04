@@ -74,6 +74,11 @@ class Engine:
             raise ValueError(
                 f"prompt too long: {len(prompt_ids)} > {self.cfg.max_prompt_len} "
                 "(no chunked prefill in this engine)")
+        pos_limit = min(self.cfg.max_seq_len, self.runner.mcfg.max_position_embeddings)
+        if len(prompt_ids) + params.max_new_tokens > pos_limit:
+            raise ValueError(
+                f"prompt ({len(prompt_ids)}) + max_new_tokens "
+                f"({params.max_new_tokens}) exceeds the position limit {pos_limit}")
         rid = self._next_rid
         self._next_rid += 1
         req = Request(rid, prompt_ids, params, self.runner.mcfg.eos_token_ids)
@@ -87,14 +92,17 @@ class Engine:
             params = [SamplingParams() for _ in prompts]
         if isinstance(params, SamplingParams):
             params = [params] * len(prompts)
+        assert len(params) == len(prompts), \
+            f"{len(prompts)} prompts but {len(params)} SamplingParams"
         rids = [self.add_request(prompt=p, params=sp, chat=chat)
                 for p, sp in zip(prompts, params)]
         while self.scheduler.has_work():
             self.step()
-        return [self._output(self._done[rid]) for rid in rids]
+        return [self._output(self._done.pop(rid)) for rid in rids]
 
     def get_output(self, rid: int) -> Optional[RequestOutput]:
-        req = self._done.get(rid)
+        """Returns the finished output and forgets the request (one-shot)."""
+        req = self._done.pop(rid, None)
         return self._output(req) if req else None
 
     def visible_tokens(self, req: Request) -> list:

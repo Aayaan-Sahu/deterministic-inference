@@ -64,8 +64,12 @@ class ModelRunner:
 
         # Persistent verify-pass input buffers (fixed base pointers so verify
         # passes see identical tensor addresses/alignment every time).
+        self.verify_buffers = self._alloc_verify_buffers(cfg, device) \
+            if cfg.mode == Mode.DVR else None
+
+    def _alloc_verify_buffers(self, cfg: EngineConfig, device: str) -> dict:
         gw = cfg.dvr_group_size * cfg.dvr_window_size
-        self.verify_buffers = {
+        return {
             "input_ids": torch.zeros(gw, dtype=torch.int64, device=device),
             "positions": torch.zeros(gw, dtype=torch.int64, device=device),
             "out_slots": torch.zeros(gw, dtype=torch.int64, device=device),
