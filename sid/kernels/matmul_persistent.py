@@ -53,14 +53,17 @@ def _matmul_persistent_kernel(
         offs_n = pid_n * BN + tl.arange(0, BN)
         mask_m = offs_m < M
         mask_n = offs_n < N
+        # int64 pointer math: M * N (lm_head: N = vocab_size) can exceed 2^31.
+        offs_m64 = offs_m.to(tl.int64)
+        offs_n64 = offs_n.to(tl.int64)
 
         acc = tl.zeros([BM, BN], dtype=tl.float32)
         for kk in tl.range(0, k_tiles):
             offs_k = kk * BK + tl.arange(0, BK)
             mask_k = offs_k < K
-            a = tl.load(A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak,
+            a = tl.load(A + offs_m64[:, None] * stride_am + offs_k[None, :] * stride_ak,
                         mask=mask_m[:, None] & mask_k[None, :], other=0.0)
-            b = tl.load(B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn,
+            b = tl.load(B + offs_k[:, None] * stride_bk + offs_n64[None, :] * stride_bn,
                         mask=mask_k[:, None] & mask_n[None, :], other=0.0)
             acc = tl.dot(a, b, acc)
 
@@ -68,7 +71,7 @@ def _matmul_persistent_kernel(
             bias = tl.load(Bias + offs_n, mask=mask_n, other=0.0).to(tl.float32)
             acc = acc + bias[None, :]
 
-        c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        c_ptrs = C + offs_m64[:, None] * stride_cm + offs_n64[None, :] * stride_cn
         tl.store(c_ptrs, acc.to(C.dtype.element_ty), mask=mask_m[:, None] & mask_n[None, :])
 
 

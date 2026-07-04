@@ -20,8 +20,9 @@ def load_ext():
     if _ext is not None:
         return _ext
 
-    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "9.0")
-
+    # Let torch detect the visible device's arch unless the caller pins one;
+    # hardcoding (e.g. "9.0") builds an sm_90-only binary that dies with "no
+    # kernel image is available" on any other GPU.
     from torch.utils.cpp_extension import load
 
     _ext = load(

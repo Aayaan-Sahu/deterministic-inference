@@ -53,6 +53,9 @@ class Engine:
 
         self._next_rid = 0
         self._done: dict[int, Request] = {}
+        # Free slots with nothing admitted (verifier scratch already carved
+        # out): the most any single request can ever reserve.
+        self._pool_capacity = self.kv.free_count
 
     # ---- public API --------------------------------------------------------
 
@@ -80,6 +83,12 @@ class Engine:
             raise ValueError(
                 f"prompt ({len(prompt_ids)}) + max_new_tokens "
                 f"({params.max_new_tokens}) exceeds the position limit {pos_limit}")
+        if len(prompt_ids) + params.max_new_tokens > self._pool_capacity:
+            raise ValueError(
+                f"prompt ({len(prompt_ids)}) + max_new_tokens "
+                f"({params.max_new_tokens}) exceeds the KV pool capacity "
+                f"{self._pool_capacity} — the request could never be admitted; "
+                "raise kv_pool_tokens or lower max_new_tokens")
         rid = self._next_rid
         self._next_rid += 1
         req = Request(rid, prompt_ids, params, self.runner.mcfg.eos_token_ids)
@@ -109,6 +118,16 @@ class Engine:
     def visible_tokens(self, req: Request) -> list:
         """Tokens the client may see right now (DVR gate)."""
         return req.output_ids[:req.gate(self.cfg.mode == Mode.DVR)]
+
+    def abort_waiting_head(self) -> Optional[int]:
+        """Fail the head waiting request (e.g. after a step() error) so its
+        client gets an answer instead of waiting forever. Returns its rid."""
+        if not self.scheduler.waiting:
+            return None
+        req = self.scheduler.waiting.popleft()
+        req.finished_reason = req.finished_reason or "error"
+        self._done[req.rid] = req
+        return req.rid
 
     # ---- step loop ----------------------------------------------------------
 

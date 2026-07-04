@@ -115,7 +115,11 @@ class Verifier:
 
             row_ids = [r.output_ids[v - 1]] + window[:-1] + [DUMMY_TOKEN_ID] * (W - u)
             input_ids.extend(row_ids)
-            positions.extend(range(p + v - 1, p + v - 1 + W))
+            # Padding rows reuse the last real position: nothing reads their
+            # output and no real row attends to them, but a position beyond
+            # prompt+max_new could run past the RoPE cos/sin table.
+            positions.extend(range(p + v - 1, p + v - 1 + u))
+            positions.extend([p + v + u - 2] * (W - u))
             sample_positions.extend(range(p + v, p + v + W))
 
             prefix_len = p + v - 1

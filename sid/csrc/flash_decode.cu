@@ -30,6 +30,7 @@
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cuda_bf16.h>
 
@@ -242,6 +243,10 @@ __global__ void flash_decode_stage2_kernel(
 
   const int seq_len = kv_indptr[b + 1] - kv_indptr[b];
   const int n_splits = num_splits[b];
+  if (n_splits == 0 || seq_len == 0) {  // empty request: avoid 0/0 below
+    o[((int64_t)b * num_q_heads + hq) * HEAD_DIM + tid] = __float2bfloat16(0.0f);
+    return;
+  }
   const int chunk = kv_per_split(seq_len, n_splits, fixed_split_size);
 
   const float* lse_row = &part_lse[((int64_t)b * num_q_heads + hq) * part_stride];
@@ -322,9 +327,12 @@ void flash_decode_fwd(
   TORCH_CHECK(num_q_heads == QPK * num_kv_heads, "expected ", QPK, " q heads per kv head");
   check_kv_layout(k_cache, num_kv_heads, "k_cache");
   check_kv_layout(v_cache, num_kv_heads, "v_cache");
-  TORCH_CHECK(kv_indptr.scalar_type() == torch::kInt32 && kv_indptr.numel() == B + 1);
-  TORCH_CHECK(kv_indices.scalar_type() == torch::kInt32);
-  TORCH_CHECK(num_splits.scalar_type() == torch::kInt32 && num_splits.numel() == B);
+  TORCH_CHECK(kv_indptr.is_cuda() && kv_indptr.is_contiguous() &&
+              kv_indptr.scalar_type() == torch::kInt32 && kv_indptr.numel() == B + 1);
+  TORCH_CHECK(kv_indices.is_cuda() && kv_indices.is_contiguous() &&
+              kv_indices.scalar_type() == torch::kInt32);
+  TORCH_CHECK(num_splits.is_cuda() && num_splits.is_contiguous() &&
+              num_splits.scalar_type() == torch::kInt32 && num_splits.numel() == B);
   TORCH_CHECK(part_o.scalar_type() == torch::kFloat32 && part_o.is_contiguous());
   TORCH_CHECK(part_lse.scalar_type() == torch::kFloat32 && part_lse.is_contiguous());
   const int part_stride = part_o.size(2);
@@ -333,7 +341,8 @@ void flash_decode_fwd(
               "part_o workspace too small / wrong shape");
   TORCH_CHECK(part_lse.size(0) >= B && part_lse.size(1) == num_q_heads &&
               part_lse.size(2) == part_stride);
-  TORCH_CHECK(o.is_contiguous() && o.sizes() == q.sizes());
+  TORCH_CHECK(o.is_cuda() && o.is_contiguous() &&
+              o.scalar_type() == torch::kBFloat16 && o.sizes() == q.sizes());
 
   auto stream = at::cuda::getCurrentCUDAStream();
 
@@ -351,6 +360,7 @@ void flash_decode_fwd(
       part_stride,
       part_o.data_ptr<float>(),
       part_lse.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   dim3 grid2(num_q_heads, B);
   flash_decode_stage2_kernel<<<grid2, NUM_THREADS, 0, stream>>>(
@@ -362,6 +372,7 @@ void flash_decode_fwd(
       num_q_heads,
       part_stride,
       reinterpret_cast<__nv_bfloat16*>(o.data_ptr()));
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 void reshape_and_cache(
@@ -379,7 +390,8 @@ void reshape_and_cache(
   TORCH_CHECK(k.dim() == 3 && k.size(1) == num_kv_heads && k.size(2) == HEAD_DIM);
   check_kv_layout(k_cache, num_kv_heads, "k_cache");
   check_kv_layout(v_cache, num_kv_heads, "v_cache");
-  TORCH_CHECK(slot_mapping.scalar_type() == torch::kInt64 && slot_mapping.numel() == T);
+  TORCH_CHECK(slot_mapping.is_cuda() && slot_mapping.is_contiguous() &&
+              slot_mapping.scalar_type() == torch::kInt64 && slot_mapping.numel() == T);
   if (T == 0) return;
 
   auto stream = at::cuda::getCurrentCUDAStream();
@@ -390,6 +402,7 @@ void reshape_and_cache(
       reinterpret_cast<__nv_bfloat16*>(v_cache.data_ptr()),
       slot_mapping.data_ptr<int64_t>(),
       num_kv_heads);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

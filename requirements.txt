@@ -10,3 +10,4 @@ uvicorn
 pydantic>=2
 pytest
 requests
+ninja  # torch.utils.cpp_extension JIT build (sid/kernels/jit.py)

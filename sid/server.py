@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import threading
 import time
 import uuid
@@ -58,7 +59,16 @@ class ServerState:
             with self.lock:
                 busy = self.engine.scheduler.has_work()
                 if busy:
-                    self.engine.step()
+                    try:
+                        self.engine.step()
+                    except Exception:
+                        # A dead engine thread would leave every current and
+                        # future request spinning in _wait_done while /health
+                        # still answers ok — fail the head waiting request
+                        # (the usual culprit: infeasible KV reservation) and
+                        # keep stepping.
+                        logging.getLogger(__name__).exception("engine.step failed")
+                        self.engine.abort_waiting_head()
             if not busy:
                 time.sleep(0.005)
 
