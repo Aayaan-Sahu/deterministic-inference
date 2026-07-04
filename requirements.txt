@@ -1,0 +1,12 @@
+# Install torch first with the CUDA index (see setup_server.sh):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+torch>=2.5
+transformers>=4.51  # Qwen3 support
+safetensors
+huggingface_hub
+numpy
+fastapi
+uvicorn
+pydantic>=2
+pytest
+requests
