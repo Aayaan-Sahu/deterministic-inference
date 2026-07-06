@@ -75,12 +75,12 @@ def run_mode(mode: str, args) -> list[dict]:
                     top_p=1.0,
                     seed=1234,
                     is_deterministic=(mode == "dvr"),
-                    ignore_eos=True,
+                    ignore_eos=args.ignore_eos,
                 )
                 for _ in prompts
             ]
             t0 = time.perf_counter()
-            outs = engine.generate(prompts, params)
+            outs = engine.generate(prompts, params, chat=args.chat)
             dt = time.perf_counter() - t0
             watched = outs[comp.index(0)]  # 0 is the watched prompt
             rows.append(
@@ -186,6 +186,11 @@ def main():
     ap.add_argument("--window", type=int, default=32)
     ap.add_argument("--group", type=int, default=4)
     ap.add_argument("--kv-pool-tokens", type=int, default=64 * 1024)
+    ap.add_argument("--no-chat", dest="chat", action="store_false",
+                    help="feed raw prompt (default: wrap in the chat template)")
+    ap.add_argument("--ignore-eos", action="store_true",
+                    help="keep generating past EOS (forces loops; off by default "
+                         "so output stops naturally and reads cleanly)")
     ap.add_argument("--out", default="/tmp/brainfish_sid.txt",
                     help="readable proof file (hash + detokenized text)")
     ap.add_argument("--contrast", action="store_true",
